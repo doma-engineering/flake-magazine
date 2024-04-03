@@ -45,6 +45,93 @@ When `sys_clone()`, a generic process forking routine, which is a macro-wrapper 
 It is done inside the most intricate `copy_process()` function between tracer setup and the information about the newly forked process is relayed to the scheduler.
 The function that governs copying the `files_struct` is `copy_files()` and it will do what it says on the tin unless clone argument `no_files` is set (see struct `kernel_clone_args` defined in `sched/task.h`).
 
+To illustrate the semantics of `copy_files()`, let's have a look at the following Zig code:
+
+```zig
+const std = @import("std");
+
+pub fn main() !void {
+    const message = "Hello, world!\n";
+    const flags = std.os.O.WRONLY | std.os.O.CREAT;
+    const fd = try std.os.open("./output.txt", flags, 0o644);
+
+    const pid = try std.os.fork();
+
+    if (pid == 0) {
+        std.os.nanosleep(0, 100_000_000);
+        std.debug.print("[CHILD] Attempting to write to fd.\n", .{});
+        try fds("CHILD");
+        const result = try std.os.write(fd, message);
+        if (result != message.len) {
+            std.debug.print("[CHILD] Failed to write to fd.\n", .{});
+            std.os.exit(1);
+        } else {
+            std.debug.print("[CHILD] We do what we must because we can.\n", .{});
+            std.os.exit(0);
+        }
+    } else {
+        std.debug.print("[PARENT] Closing fd immediately.\n", .{});
+        // Close fd immediately from the parent.
+        std.os.close(fd);
+        try fds("PARENT");
+
+        const wpr = std.os.waitpid(pid, 0x00000000); // Wait for child process to exit
+
+        // Check if the child exited with an error due to closed STDIN
+        if (std.os.W.IFEXITED(wpr.status) and std.os.W.EXITSTATUS(wpr.status) == 0) {
+            std.debug.print("[PARENT] This was a triumph.\n", .{});
+        }
+    }
+}
+
+// Dummy function to print active file descriptors, ignore for the time being
+pub fn fds(_: [*:0]const u8) !void {}
+```
+
+You see that we fork a process here and let the parent process close `output.txt` by waiting in the child for 100 milliseconds.
+As we described above, the files are copied to the child at fork time, so it doesn't matter that the file is closed by parent.
+The child has the copied file "alive", so `fd` resolves to an open file in `files_struct`.
+
+To illustrate this point further, we would like to query `files_struct`, but to my knowledge we can't do it with `libc` facilities or otherwise.
+We can, however, get the information about the file descriptors tracked by kernel by querying `/proc/self/fd`. 
+Let's implement the dummy `fds` function from the previous example.
+
+```zig
+pub fn fds(whose: [*:0]const u8) !void {
+    var dir = try std.fs.cwd().openIterableDir("/proc/self/fd", .{});
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind == .sym_link) {
+            var resolved_path: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            const sl_resolved_path = try std.os.readlinkat(dir.dir.fd, entry.name, &resolved_path);
+            std.debug.print("[{s}] FD {s}: {s}\n", .{ whose, entry.name, sl_resolved_path });
+        }
+    }
+}
+```
+
+As we run this in a clean terminal, we get output that confirms that `output.txt` was, indeed, closed from the parent process.
+
+```
+λ zig build run-01B-fd-forward && cat output.txt
+[PARENT] Closing fd immediately.
+[PARENT] FD 0: /dev/pts/19
+[PARENT] FD 1: /dev/pts/19
+[PARENT] FD 2: /dev/pts/19
+[PARENT] FD 3: /proc/455/fd
+[CHILD] Attempting to write to fd.
+[CHILD] FD 0: /dev/pts/19
+[CHILD] FD 1: /dev/pts/19
+[CHILD] FD 2: /dev/pts/19
+[CHILD] FD 3: /home/sweater/flake-mag/001/01/output.txt
+[CHILD] FD 4: /proc/456/fd
+[CHILD] We do what we must because we can.
+[PARENT] This was a triumph.
+Hello, world!
+```
+
 Of course, most, if not all, the materials online on `stdio` will tell you, that there are three special files with file descriptors 0, 1, and 2, that get passed from parent to child, but if we look at the process initiation code or, in fact, aforementioned `copy_files` function, we will see that there is no special treatment of any files in `files_struct` whatsoever!
 
 ```C
@@ -81,7 +168,7 @@ out:
 	return error;
 }
 ```
-_Routine that copies files in the kernel doesn't have any special treatment for stdio. Kernel 6.8.2._
+_Routine that copies files in the kernel doesn't have any special treatment for stdio. `kernel/fork.c`, Kernel 6.8.2._
 
 As a matter of fact, we can scour
 
