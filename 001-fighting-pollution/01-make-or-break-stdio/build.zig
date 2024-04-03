@@ -13,6 +13,7 @@ pub fn build(b: *std.Build) void {
     const executables = [_]struct{ name: []const u8, source_path: []const u8 }{
         .{ .name = "01-make-or-break-stdio", .source_path = "src/main.zig" },
         .{ .name = "01A-closed-stdio", .source_path = "src/closed.zig" },
+        .{ .name = "01B-fd-forward", .source_path = "src/fd_forward.zig" },
         // Add more executables here
     };
 

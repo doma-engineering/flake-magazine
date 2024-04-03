@@ -12,7 +12,7 @@ There is an old adage that everything in UNIX is a file.
 It certainly holds true for stdio.
 In Linux, every process has a data structure called `files_struct`, which holds `fdtable`, which provides a low-level interface to all the file descriptors currently associated with said process.
 
-```C99
+```C
 /*
  * The caller must ensure that fd table isn't shared or hold rcu or file lock
  */
@@ -32,19 +32,20 @@ static inline struct file *files_lookup_fd_raw(struct files_struct *files, unsig
 	return (struct file *)(mask & (unsigned long)needs_masking);
 }
 ```
-_Low-level file descriptor lookup. Kernel v6.8.2._
-
+_Low-level file descriptor lookup. `include/linux/fdtable.h`, Kernel v6.8.2._
 
 Note that it stores the descriptors of all the files, not just the open ones.
 Kernel routines can verify if a file is open by calling `fd_is_open(unsigned int fd, const struct fdtable *fdt)` on a given file descriptor table.
 
+> Hint! If you want to easily look up and cross-reference identifiers in Linux kernel, you can use Bootlin cross-referencer, hosted over at https://elixir.bootlin.com/linux/v6.8.2/source.
+
 When `sys_clone()`, a generic process forking routine, which is a macro-wrapper around `kernel_clone()` is called, all the files from the parent process, shall be copied into the child process.
 It is done inside the most intricate `copy_process()` function between tracer setup and the information about the newly forked process is relayed to the scheduler.
-The function that governs copying the `files_struct` is `copy_files` and it will do what it says on the tin unless clone argument `no_files` is set (see struct `kernel_clone_args` defined in `sched/task.h`).
+The function that governs copying the `files_struct` is `copy_files()` and it will do what it says on the tin unless clone argument `no_files` is set (see struct `kernel_clone_args` defined in `sched/task.h`).
 
-Of course, most, if not all the materials online on `stdio` will tell you, that there are three special files with file descriptors 0, 1, and 2, that get passed from parent to child, but if we look at the process initiation code or, in fact, aforementioned `copy_files` function, we will see that there is no special treatment of any files in `files_struct` whatsoever!
+Of course, most, if not all, the materials online on `stdio` will tell you, that there are three special files with file descriptors 0, 1, and 2, that get passed from parent to child, but if we look at the process initiation code or, in fact, aforementioned `copy_files` function, we will see that there is no special treatment of any files in `files_struct` whatsoever!
 
-```C99
+```C
 static int copy_files(unsigned long clone_flags, struct task_struct *tsk,
 		      int no_files)
 {
@@ -80,11 +81,13 @@ out:
 ```
 _Routine that copies files in the kernel doesn't have any special treatment for stdio. Kernel 6.8.2._
 
+As a matter of fact, we can scour
+
 In the following section, we discuss how stdio files come into existence.
 
 ## From Whence You Came
 
-The earliest tripple 
+The earliest place where we find our elusive 
 
 But where do these file descriptors come from in the first place?
 For some reason this is not a question that is easy to find an answer to.
