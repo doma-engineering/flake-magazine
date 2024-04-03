@@ -39,6 +39,8 @@ Kernel routines can verify if a file is open by calling `fd_is_open(unsigned int
 
 > Hint! If you want to easily look up and cross-reference identifiers in Linux kernel, you can use Bootlin cross-referencer, hosted over at https://elixir.bootlin.com/linux/v6.8.2/source.
 
+![Elixir Cross-Referencer](./01-01-elixir.png)
+
 When `sys_clone()`, a generic process forking routine, which is a macro-wrapper around `kernel_clone()` is called, all the files from the parent process, shall be copied into the child process.
 It is done inside the most intricate `copy_process()` function between tracer setup and the information about the newly forked process is relayed to the scheduler.
 The function that governs copying the `files_struct` is `copy_files()` and it will do what it says on the tin unless clone argument `no_files` is set (see struct `kernel_clone_args` defined in `sched/task.h`).
