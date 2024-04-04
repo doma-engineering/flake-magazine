@@ -5,6 +5,9 @@ This approach is broadly called inter-process communication (IPC), and there are
 The most basic one is using standard input/output (stdio) to set up such communication.
 In this article we shall take a deep-dive into this approach hoping to demystify it.
 
+The practical benefit of using this article is that we use Zig code snippets in this article to illustrate the concepts.
+If you always were interested in what this language looks like and how to work with it, this article is for you.
+
 ## Files!
 
 If there was a UNIX musical ever made, in the tradition of punchy single-word musical names, it would be called "Files!".
@@ -132,7 +135,9 @@ As we run this in a clean terminal, we get output that confirms that `output.txt
 Hello, world!
 ```
 
-Of course, most, if not all, the materials online on `stdio` will tell you, that there are three special files with file descriptors 0, 1, and 2, that get passed from parent to child, but if we look at the process initiation code or, in fact, aforementioned `copy_files` function, we will see that there is no special treatment of any files in `files_struct` whatsoever!
+You can see that file descriptors 0, 1, and 2 are set both for parent and the child.
+Of course, most, if not all, the materials online on `stdio` will tell you that these are three special files that get passed from parent to child.
+But if we look at the process initiation code or, in fact, aforementioned `copy_files` function, we will see that there is no special treatment of any files in `files_struct` whatsoever!
 
 ```C
 static int copy_files(unsigned long clone_flags, struct task_struct *tsk,
@@ -170,20 +175,42 @@ out:
 ```
 _Routine that copies files in the kernel doesn't have any special treatment for stdio. `kernel/fork.c`, Kernel 6.8.2._
 
-As a matter of fact, we can scour
+As a matter of fact, we can scour the entirety of kernel codebase responsible for files and processes for stdio-related stuff, we will find naught.
 
-In the following section, we discuss how stdio files come into existence.
+In the following section, we discuss how stdio files actually come into existence.
 
 ## From Whence You Came
 
-The earliest place where we find our elusive 
+![From Whence You Came](./01-01-from-whence.jpg)
 
-But where do these file descriptors come from in the first place?
-For some reason this is not a question that is easy to find an answer to.
-A short answer -- they get created before the userspace TODO.
-head.S -> start_kernel -> ... console_on_rootfs.
+The earliest place where we find our elusive stdio files is `console_on_rootfs()` function.
+As the kernel gets unpacked (`head.S` -> `start_kernel` -> `...`), a file `/dev/console` gets populated by initramfs.
+Afterwards, this file gets multiplexed into three file descriptors and an early console driver will use it to organise its stdio.
 
-To answer it, let's briefly recap the way modern Linux TODO.
+```
+/* Open /dev/console, for stdin/stdout/stderr, this should never fail */
+void __init console_on_rootfs(void)
+{
+	struct file *file = filp_open("/dev/console", O_RDWR, 0);
+
+	if (IS_ERR(file)) {
+		pr_err("Warning: unable to open an initial console.\n");
+		return;
+	}
+	init_dup(file);
+	init_dup(file);
+	init_dup(file);
+	fput(file);
+}
+```
+_Early console is the first place where stdio appears during Linux boot process. `init/main.c`, Kernel 6.8.2._
+
+> Note! While normally stdio is populated using `dup2()` system call (see below), early console setup does it differently.
+> It uses a custom file descriptor duplication technique to prevent race conditions.
+> Under the hood, it uses read-copy-update (RCU) synchronization mechanism which:
+> 1. Removes the pointer to the early file descriptor table, preventing new read attempts.
+> 2. Waits for its readers to complete critical sections of working with the data behind the original pointer.
+> 3. Frees (or otherwise rearranges) memory section after all the existing readers reported that their critical sections are completed.
 
 ### Then Why Don't STDINs of Different Terminal Windows Pollute Each Other?
 
