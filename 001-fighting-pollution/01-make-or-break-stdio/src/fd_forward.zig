@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn fds(whose: [*:0]const u8) !void {
     // std.debug.print("1", .{});
-    var dir = try std.fs.cwd().openIterableDir("/proc/self/fd", .{});
+    var dir = try std.fs.openIterableDirAbsolute("/proc/self/fd", .{});
     // std.debug.print("2", .{});
     defer dir.close();
 

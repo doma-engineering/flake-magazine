@@ -101,7 +101,7 @@ Let's implement the dummy `fds` function from the previous example.
 
 ```zig
 pub fn fds(whose: [*:0]const u8) !void {
-    var dir = try std.fs.cwd().openIterableDir("/proc/self/fd", .{});
+    var dir = try std.fs.openIterableDirAbsolute("/proc/self/fd", .{});
     defer dir.close();
 
     var it = dir.iterate();
@@ -211,6 +211,96 @@ _Early console is the first place where stdio appears during Linux boot process.
 > 1. Removes the pointer to the early file descriptor table, preventing new read attempts.
 > 2. Waits for its readers to complete critical sections of working with the data behind the original pointer.
 > 3. Frees (or otherwise rearranges) memory section after all the existing readers reported that their critical sections are completed.
+> A good example of RCU strategy from daily computer use would be the way Firefox browser forces restart after upgrade.
+> It lets the user finish their work in the existing tabs, but shan't allow a new tab to be opened, prompting browser restart.
+
+## Streams of the Multitudes
+
+Looking at the code snippets, you may already understand how does it happen that standard input-outputs of various programs don't cross-pollute.
+Let's discuss it with more precision, however. 
+
+First of all, we should be clear that `/dev/console` file we have seen and, indeed, `/dev/pts/19`, aren't regular text files.
+Linux kernel defines many file types, making adage of "everything is a file" a bit unnuanced.
+Let's annotate these types using Zig standard library:
+
+```zig
+    pub const Kind = enum {
+        block_device, // Your hard drives and other
+                      // possible devices that store
+                      // data in fixed-size blocks.
+                      // Normally provide random access.
+
+        character_device, // Your keyboards, mice,
+                          // serial ports. Devices
+                          // that emit and consume
+                          // data byte-by-byte.
+                          // Random access infrequent.
+
+        directory, // A file that only can refer to
+                   // other files. Normal stuff.
+
+        named_pipe, // A more advanced IPC method, out
+                    // of scope of this article.
+
+        sym_link, // A file that contains exactly one
+                  // reference to another file.
+                  // Can be thought of as a "shortcut".
+
+        file, // A byte-aligned file holding some data.
+              // This file type is what people imagine
+              // when you say "a file". Hence the name.
+
+        unix_domain_socket, // A socket that behaves like
+                            // a TCP/IP socket, except is
+                            // using file system for data
+                            // transfer.
+
+        // ... and some more non-Linux file types 
+        // that exist on other UNIXes.
+    };
+```
+_File kinds, per Zig standard library. `lib/zig/std/fs/file.zig`, Zig v.0.11._
+
+I think you can guess what sort of files are stored in `/dev/pts`, but let's verify it:
+
+```zig
+const std = @import("std");
+
+pub fn print_kinds(from: []const u8) !void {
+    var dir = try std.fs.openIterableDirAbsolute(from, .{});
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        // Switch on entry.kind
+        switch (entry.kind) {
+            .block_device => std.debug.print("block device: {s}\n", .{entry.name}),
+            .character_device => std.debug.print("character device: {s}\n", .{entry.name}),
+            .directory => std.debug.print("directory: {s}\n", .{entry.name}),
+            .named_pipe => std.debug.print("named pipe: {s}\n", .{entry.name}),
+            .sym_link => std.debug.print("sym link: {s}\n", .{entry.name}),
+            .file => std.debug.print("file: {s}\n", .{entry.name}),
+            .unknown => std.debug.print("unknown: {s}\n", .{entry.name}),
+            else => std.debug.print("non-linux: {s}\n", .{entry.name}),
+        }
+    }
+}
+
+pub fn main() !void {
+    try print_kinds("/dev/pts");
+}
+```
+
+The output of this program is as follows:
+
+```
+character device: 2
+character device: 3
+character device: 1
+character device: ptmx
+```
+
+TODO PTMX
 
 ## Doppelgang Paradox
 

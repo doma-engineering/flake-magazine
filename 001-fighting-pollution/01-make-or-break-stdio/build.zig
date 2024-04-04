@@ -10,21 +10,17 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Define an array of structs containing the executable name and source path
-    const executables = [_]struct{ name: []const u8, source_path: []const u8 }{
+    const executables = [_]struct { name: []const u8, source_path: []const u8 }{
         .{ .name = "01-make-or-break-stdio", .source_path = "src/main.zig" },
         .{ .name = "01A-closed-stdio", .source_path = "src/closed.zig" },
         .{ .name = "01B-fd-forward", .source_path = "src/fd_forward.zig" },
+        .{ .name = "01B-whatis-pts", .source_path = "src/pts.zig" },
         // Add more executables here
     };
 
     // Iterate over the executables array and create each executable
     inline for (executables) |exe| {
-        const exe_full = b.addExecutable(.{ 
-            .name = exe.name,
-            .root_source_file = .{ .path = exe.source_path },
-            .target = target,
-            .optimize = optimize
-        });
+        const exe_full = b.addExecutable(.{ .name = exe.name, .root_source_file = .{ .path = exe.source_path }, .target = target, .optimize = optimize });
 
         b.installArtifact(exe_full);
 
