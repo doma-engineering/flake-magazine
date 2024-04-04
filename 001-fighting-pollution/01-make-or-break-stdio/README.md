@@ -212,6 +212,11 @@ _Early console is the first place where stdio appears during Linux boot process.
 > 2. Waits for its readers to complete critical sections of working with the data behind the original pointer.
 > 3. Frees (or otherwise rearranges) memory section after all the existing readers reported that their critical sections are completed.
 
+## Doppelgang Paradox
+
+Q: If stderr is stdout is stdin, how come they can be distinguished as stuff gets output into those?
+A: It can't unless you reattach fds to something else.
+
 ### Then Why Don't STDINs of Different Terminal Windows Pollute Each Other?
 
 TODO explore and explain the source code that shows how pty sets up fd 0, 1, 2.
