@@ -259,7 +259,16 @@ Let's annotate these types using Zig standard library:
         // that exist on other UNIXes.
     };
 ```
-_File kinds, per Zig standard library. `lib/zig/std/fs/file.zig`, Zig v.0.11._
+_File kinds, per Zig standard library. `lib/zig/std/fs/file.zig`, Zig 0.11._
+
+>Note! The letters `pt` in `pts` stand for "pseudo-terminal", and `s` stands for an archaic word meaning "secondary".
+> Pseudo-terminals shouldn't be confused with virtual terminals!
+> A virtual terminal is an emulator of a hardware terminal in software.
+> Linux without graphical server running such as `wayland` or `X11` creates a bunch of consoles that are connected to their own virtual terminal via `/dev/tty{0,1,...}` devices.
+> Pt-main and pt-secondary (named differently in Linux Kernel) are acquired via `openpty()` call from `libc`.
+> Virtual terminals are created with `getty()` call from the kernel.
+
+![Two sessions are active and attached to virtual terminals](./01-03-getty.png)
 
 I think you can guess what sort of files are stored in `/dev/pts`, but let's verify it:
 
@@ -290,28 +299,233 @@ pub fn main() !void {
     try print_kinds("/dev/pts");
 }
 ```
+_A zig program that prints the kinds of the files in a given directory._
 
 The output of this program is as follows:
 
 ```
+character device: 0
 character device: 2
-character device: 3
 character device: 1
 character device: ptmx
 ```
+_An output of `try print_kinds("/dev/pts")`._
 
-TODO PTMX
+Root-owned `ptmx` is the key to how pseudo-terminal devices are created.
+
+```
+crw--w---- 1 sweater tty  136,  0 Apr  4 21:46 0
+crw--w---- 1 sweater tty  136,  1 Apr  1 03:38 1
+crw--w---- 1 sweater tty  136,  2 Apr  1 03:38 2
+c--------- 1 root    root   5,  2 Mar 31 06:32 ptmx
+```
+_An output of `ls -la /dev/pts`._
+
+It's a pseudo-terminal multiplexer.
+This is the way all the terminal emulators, such as `alacritty` or `urxvt`, get main and secondary device pairs (named differently in Linux kernel).
+Terminal emulator itself then relies on the main device (a device with no path) to orchestrate session management and uses the secondary device to orchestrate input and output.
+
+All of the above considerations explain the following two properties of stdio:
+
+ 1. You can't seek stdio, once you flush bytes into a stdio file, they can only be sequentially consumed by a reader.
+ 2. One does not simply attaches to a pts device file or to a tty file in hopes to be able to read stdio contents.
+
+As a matter of fact, you can conduct the following experiment:
+
+ 1. Get `pts` device file of your pseudo-terminal by running `tty`.
+ 2. Start reading from it with `cat /dev/pts/$pts_id`
+ 3. Try typing `echo Hello` into your pseudo-terminal.
+
+What you will observe is that your keypresses are *either* consumed by `cat` *or* displayed in your terminal emulator because keypress was communicated to PTM, which told it to redraw, but not both at the same time.
+I don't know if you find it to be a funny prank, but the behaviour of the active console is sure confusing.
+
+![Probably a bad prank?..](./01-04-prank.png)
+
+As you can see in the code of your favourite terminal emulator, the secondary pseudo-terminal device, obtained via an `openpty(&main, &secondary, ...)` call shall be exactly the file which is going to be duplicated with `dup2` and serve as *the* stdio file.
+
+```C
+int
+ttynew(const char *line, char *cmd, const char *out, char **args)
+{
+    int m, s;
+
+    if (out) {
+        term.mode |= MODE_PRINT;
+        iofd = (!strcmp(out, "-")) ?
+              1 : open(out, O_WRONLY | O_CREAT, 0666);
+        if (iofd < 0) {
+            fprintf(stderr, "Error opening %s:%s\n",
+                out, strerror(errno));
+        }
+    }
+
+    if (line) {
+        if ((cmdfd = open(line, O_RDWR)) < 0)
+            die("open line '%s' failed: %s\n",
+                line, strerror(errno));
+        dup2(cmdfd, 0);
+        stty(args);
+        return cmdfd;
+    }
+
+    /* seems to work fine on linux, openbsd and freebsd */
+    if (openpty(&m, &s, NULL, NULL, NULL) < 0)
+        die("openpty failed: %s\n", strerror(errno));
+
+    switch (pid = fork()) {
+    case -1:
+        die("fork failed: %s\n", strerror(errno));
+        break;
+    case 0:
+        close(iofd);
+        close(m);
+        setsid(); /* create a new process group */
+        dup2(s, 0);
+        dup2(s, 1);
+        dup2(s, 2);
+        if (ioctl(s, TIOCSCTTY, NULL) < 0)
+            die("ioctl TIOCSCTTY failed: %s\n", strerror(errno));
+        if (s > 2)
+            close(s);
+#ifdef __OpenBSD__
+        if (pledge("stdio getpw proc exec", NULL) == -1)
+            die("pledge\n");
+#endif
+        execsh(cmd, args);
+        break;
+    default:
+#ifdef __OpenBSD__
+        if (pledge("stdio rpath tty proc", NULL) == -1)
+            die("pledge\n");
+#endif
+        close(s);
+        cmdfd = m;
+        signal(SIGCHLD, sigchld);
+        break;
+    }
+    return cmdfd;
+}
+
+size_t
+ttyread(void)
+{
+    static char buf[BUFSIZ];
+    static int buflen = 0;
+    int ret, written;
+
+    /* append read bytes to unprocessed bytes */
+    ret = read(cmdfd, buf+buflen, LEN(buf)-buflen);
+
+    switch (ret) {
+    case 0:
+        exit(0);
+    case -1:
+        die("couldn't read from shell: %s\n", strerror(errno));
+    default:
+        buflen += ret;
+        written = twrite(buf, buflen, 0);
+        buflen -= written;
+        /* keep any incomplete UTF-8 byte sequence for the next call */
+        if (buflen > 0)
+            memmove(buf, buf + written, buflen);
+        return ret;
+    }
+}
+
+void
+ttywrite(const char *s, size_t n, int may_echo)
+{
+    const char *next;
+
+    if (may_echo && IS_SET(MODE_ECHO))
+        twrite(s, n, 1);
+
+    if (!IS_SET(MODE_CRLF)) {
+        ttywriteraw(s, n);
+        return;
+    }
+
+    /* This is similar to how the kernel handles ONLCR for ttys */
+    while (n > 0) {
+        if (*s == '\r') {
+            next = s + 1;
+            ttywriteraw("\r\n", 2);
+        } else {
+            next = memchr(s, '\r', n);
+            DEFAULT(next, s + n);
+            ttywriteraw(s, next - s);
+        }
+        n -= next - s;
+        s = next;
+    }
+}
+```
+_Stdio, writing and reading in suckless terminal. `st.c`, st 0.9._
+
+```C
+void
+ttywriteraw(const char *s, size_t n)
+{
+    fd_set wfd, rfd;
+    ssize_t r;
+    size_t lim = 256;
+
+    /*
+     * Remember that we are using a pty, which might be a modem line.
+     * Writing too much will clog the line. That's why we are doing this
+     * dance.
+     * FIXME: Migrate the world to Plan 9.
+     */
+    while (n > 0) {
+        FD_ZERO(&wfd);
+        FD_ZERO(&rfd);
+        FD_SET(cmdfd, &wfd);
+        FD_SET(cmdfd, &rfd);
+
+        /* Check if we can write. */
+        if (pselect(cmdfd+1, &rfd, &wfd, NULL, NULL, NULL) < 0) {
+            if (errno == EINTR)
+                continue;
+            die("select failed: %s\n", strerror(errno));
+        }
+        if (FD_ISSET(cmdfd, &wfd)) {
+            /*
+             * Only write the bytes written by ttywrite() or the
+             * default of 256. This seems to be a reasonable value
+             * for a serial line. Bigger values might clog the I/O.
+             */
+            if ((r = write(cmdfd, s, (n < lim)? n : lim)) < 0)
+                goto write_error;
+            if (r < n) {
+                /*
+                 * We weren't able to write out everything.
+                 * This means the buffer is getting full
+                 * again. Empty it.
+                 */
+                if (n < lim)
+                    lim = ttyread();
+                n -= r;
+                s += r;
+            } else {
+                /* All bytes have been written. */
+                break;
+            }
+        }
+        if (FD_ISSET(cmdfd, &rfd))
+            lim = ttyread();
+    }
+    return;
+
+write_error:
+    die("write error on tty: %s\n", strerror(errno));
+}
+```
+_Funny FIXME. `st.c`, st 0.9._
 
 ## Doppelgang Paradox
 
 Q: If stderr is stdout is stdin, how come they can be distinguished as stuff gets output into those?
 A: It can't unless you reattach fds to something else.
-
-### Then Why Don't STDINs of Different Terminal Windows Pollute Each Other?
-
-TODO explore and explain the source code that shows how pty sets up fd 0, 1, 2.
-
-TODO explore and explain the source code that shows how terminal emulators, for example `st` (suckless terminal) sets up /dev/pts/XX and links fd 0, 1, 2 to it
 
 ---
 
