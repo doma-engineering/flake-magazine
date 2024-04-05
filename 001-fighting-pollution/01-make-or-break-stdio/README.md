@@ -524,8 +524,62 @@ _Funny FIXME. `st.c`, st 0.9._
 
 ## Doppelgang Paradox
 
-Q: If stderr is stdout is stdin, how come they can be distinguished as stuff gets output into those?
-A: It can't unless you reattach fds to something else.
+We already learned that it doesn't happen that three different device files are created for each entity in `stdio`.
+But if it's the same file, how come they can be distinguished as data gets flushed into those?
+Well, the short answer is that they can't be distinguished.
+To a degree that even stdin gets opened with write permissions by default, which means you can write into it.
+And indeed, when you write into STDIN, your terminal will behave in the same way as it would if you wrote into STDOUT or STDERR.
+Thus, the three are, unsurprisingly, true doppelgangers!
+
+```zig
+const std = @import("std");
+
+pub fn main() !void {
+    _ = try std.os.write(0, "Hello, world!\n");
+}
+```
+_This program will output "Hello, world!" in your terminal emulator._
+
+However, since the meaning of STDIN being attached to `/dev/pts/$pts_id` is to read user input, which is passed to PTS via PTM as a result of handling keypresses, this write shall be ignored and won't be read by the following program.
+The forked child here shall terminate only after a user presses a key, which shall be relayed to the child via STDIN.
+
+```zig
+const std = @import("std");
+
+pub fn main() !void {
+    const pid = try std.os.fork();
+
+    if (pid == 0) {
+        var buf = [_:255]u8{0};
+        _ = try std.os.read(0, &buf);
+        std.debug.print("Child read: {s}\n", .{buf});
+    } else {
+        std.os.nanosleep(0, 10_000);
+        _ = try std.os.write(0, "Hello, world!\n");
+    }
+}
+```
+_This program will crash if you pipe something into it, because the pipe won't be opened for read!_
+
+Thus, the only way to "un-dopplegang" stdio is to swap out some file descriptors.
+The easiest way to do so is by using pipes and redirections while invoking programs from a shell like `bash`.
+Observe every stdio file being replaced in the following snippet.
+
+```
+λ echo '/dev/pts/ who?' | ls -la /proc/self/fd 2>output.err | tee output.txt
+total 0
+dr-x------ 2 sweater sweater  0 Apr  5 01:20 ./
+dr-xr-xr-x 9 sweater sweater  0 Apr  5 01:20 ../
+lr-x------ 1 sweater sweater 64 Apr  5 01:20 0 -> pipe:[8367988]
+l-wx------ 1 sweater sweater 64 Apr  5 01:20 1 -> pipe:[8367990]
+l-wx------ 1 sweater sweater 64 Apr  5 01:20 2 -> /home/sweater/output.err
+lr-x------ 1 sweater sweater 64 Apr  5 01:20 3 -> /proc/26527/fd
+```
+_Input and output are piped, while stderr is recorded into a regular file. bash 5.0.7._
+
+> Note! `tee` is a very useful program for situations when you need to have an interactive session, traces of which you want to preserve for a later review or further automated manipulation.
+> It displays whatever it gets into STDIN into STDOUT, but also records that data into file.
+> Use `tee -a` if you want to append to file without overwriting.
 
 ---
 

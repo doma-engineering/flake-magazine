@@ -14,7 +14,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "01-make-or-break-stdio", .source_path = "src/main.zig" },
         .{ .name = "01A-closed-stdio", .source_path = "src/closed.zig" },
         .{ .name = "01B-fd-forward", .source_path = "src/fd_forward.zig" },
-        .{ .name = "01B-whatis-pts", .source_path = "src/pts.zig" },
+        .{ .name = "01C-whatis-pts", .source_path = "src/pts.zig" },
+        .{ .name = "01D-write-to-stdin", .source_path = "src/stdin_abuse.zig" },
         // Add more executables here
     };
 
