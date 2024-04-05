@@ -211,6 +211,7 @@ _Early console is the first place where stdio appears during Linux boot process.
 > 1. Removes the pointer to the early file descriptor table, preventing new read attempts.
 > 2. Waits for its readers to complete critical sections of working with the data behind the original pointer.
 > 3. Frees (or otherwise rearranges) memory section after all the existing readers reported that their critical sections are completed.
+>
 > A good example of RCU strategy from daily computer use would be the way Firefox browser forces restart after upgrade.
 > It lets the user finish their work in the existing tabs, but shan't allow a new tab to be opened, prompting browser restart.
 
