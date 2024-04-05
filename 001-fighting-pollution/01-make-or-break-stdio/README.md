@@ -560,7 +560,7 @@ pub fn main() !void {
     }
 }
 ```
-_This program will crash if you pipe something into it, because the pipe won't be opened for read!_
+_This program will crash if you pipe something into it, because the pipe won't be opened for writing!_
 
 Thus, the only way to "un-dopplegang" stdio is to swap out some file descriptors.
 The easiest way to do so is by using pipes and redirections while invoking programs from a shell like `bash`.
