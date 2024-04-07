@@ -5,7 +5,8 @@ This approach is broadly called inter-process communication (IPC), and there are
 The most basic one is using standard input/output (stdio) to set up such communication.
 In this article we shall take a deep-dive into this approach hoping to demystify it.
 
-The practical benefit of using this article is that we use Zig code snippets in this article to illustrate the concepts.
+For it to be at least somewhat practical, we provide some snippets and tips at the end of this article.
+An additional practical benefit of this article is that we use Zig code snippets in this article to illustrate the concepts.
 If you always were interested in what this language looks like and how to work with it, this article is for you.
 
 ## Files!
