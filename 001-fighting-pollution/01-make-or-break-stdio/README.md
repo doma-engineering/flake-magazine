@@ -151,8 +151,9 @@ As we run this in a clean terminal, we get output that confirms that `output.txt
 Hello, world!
 ```
 
-We can also check that these files can indeed work with the usual functions that work with file descriptors.
-And that, indeed, closed files won't be accessible by the child.
+In the snippet above we have demonstrated how to make use of the standard low level functions to open and close files.
+Now let's demonstrate that the same functions can be used to work with stdio files.
+As well as that, let's demonstrate that indeed if a file, even one of stdio files, is closed, it won't be copied by Linux kernel to the forked process.
 
 ```zig
 pub fn main() !void {
@@ -196,19 +197,19 @@ If you were wondering if closing stdio files is a good idea, I hope that this cu
 
 ```
 λ zig build run-01A-closed-stdio
-[PARENT_BEFORE] FD 0: /dev/pts/2
-[PARENT_BEFORE] FD 1: /dev/pts/2
-[PARENT_BEFORE] FD 2: /dev/pts/2
+[PARENT_BEFORE] FD 0: /dev/pts/19
+[PARENT_BEFORE] FD 1: /dev/pts/19
+[PARENT_BEFORE] FD 2: /dev/pts/19
 [PARENT_BEFORE] FD 3: /proc/26202/fd
 [PARENT_NO_STDIN] FD 0: /proc/26202/fd
-[PARENT_NO_STDIN] FD 1: /dev/pts/2
-[PARENT_NO_STDIN] FD 2: /dev/pts/2
+[PARENT_NO_STDIN] FD 1: /dev/pts/19
+[PARENT_NO_STDIN] FD 2: /dev/pts/19
 [PARENT_NO_STDOUT] FD 0: /proc/26202/fd
-[PARENT_NO_STDOUT] FD 2: /dev/pts/2
+[PARENT_NO_STDOUT] FD 2: /dev/pts/19
 [PARENT_AFTER] FD 0: /proc/26202/fd
-[PARENT_AFTER] FD 2: /dev/pts/2
+[PARENT_AFTER] FD 2: /dev/pts/19
 [CHILD] FD 0: /proc/26203/fd
-[CHILD] FD 2: /dev/pts/2
+[CHILD] FD 2: /dev/pts/19
 [CHILD] Attempting to read from STDIN...
 [PARENT] Child process confirmed that STDIN is closed.
 ```
@@ -284,7 +285,7 @@ void __init console_on_rootfs(void)
 ```
 _Early console is the first place where stdio appears during Linux boot process. `init/main.c`, Kernel 6.8.2._
 
-> Note! While normally stdio is populated using `dup2()` system call (see below), early console setup does it differently.
+> Note! While normally stdio is populated using `dup2()` system call, early console setup does it differently.
 > It uses a custom file descriptor duplication technique to prevent race conditions.
 > Under the hood, it uses read-copy-update (RCU) synchronization mechanism which:
 > 1. Removes the pointer to the early file descriptor table, preventing new read attempts.
@@ -299,49 +300,9 @@ _Early console is the first place where stdio appears during Linux boot process.
 Looking at the code snippets, you may already understand how does it happen that standard input-outputs of various programs don't cross-pollute.
 Let's discuss it with more precision, however. 
 
-First of all, we should be clear that `/dev/console` file we have seen and, indeed, `/dev/pts/19`, aren't regular text files.
-Linux kernel defines many file types, making adage of "everything is a file" a bit unnuanced.
-Let's annotate these types using Zig standard library:
+First of all, we should be clear that `/dev/console` file we have seen and, indeed, the `/dev/pts/19` file we have seen, aren't regular files like a text file.
 
-```zig
-    pub const Kind = enum {
-        block_device, // Your hard drives and other
-                      // possible devices that store
-                      // data in fixed-size blocks.
-                      // Normally provide random access.
-
-        character_device, // Your keyboards, mice,
-                          // serial ports. Devices
-                          // that emit and consume
-                          // data byte-by-byte.
-                          // Random access infrequent.
-
-        directory, // A file that only can refer to
-                   // other files. Normal stuff.
-
-        named_pipe, // A more advanced IPC method, out
-                    // of scope of this article.
-
-        sym_link, // A file that contains exactly one
-                  // reference to another file.
-                  // Can be thought of as a "shortcut".
-
-        file, // A byte-aligned file holding some data.
-              // This file type is what people imagine
-              // when you say "a file". Hence the name.
-
-        unix_domain_socket, // A socket that behaves like
-                            // a TCP/IP socket, except is
-                            // using file system for data
-                            // transfer.
-
-        // ... and some more non-Linux file types 
-        // that exist on other UNIXes.
-    };
-```
-_File kinds, per Zig standard library. `lib/zig/std/fs/file.zig`, Zig 0.11._
-
->Note! The letters `pt` in `pts` stand for "pseudo-terminal", and `s` stands for an archaic word meaning "secondary".
+> Note! The letters `pt` in `pts` stand for "pseudo-terminal", and `s` stands for an archaic word meaning "secondary".
 > Pseudo-terminals shouldn't be confused with virtual terminals!
 > A virtual terminal is an emulator of a hardware terminal in software.
 > Linux without graphical server running such as `wayland` or `X11` creates a bunch of consoles that are connected to their own virtual terminal via `/dev/tty{0,1,...}` devices.
@@ -350,7 +311,17 @@ _File kinds, per Zig standard library. `lib/zig/std/fs/file.zig`, Zig 0.11._
 
 ![Two sessions are active and attached to virtual terminals](./01-03-getty.png)
 
-I think you can guess what sort of files are stored in `/dev/pts`, but let's verify it:
+Linux kernel defines many file kinds, confirming what we said in the introduction that "everything is a file" adage is less nuanced than the reality.
+Here are the kinds of files:
+- Block device: your hard drives and other possible devices that stored data in fixed-size blocks. These normally provide random access.
+- Character device: your keyboards, mice, serial ports. Devices that emit and consume data byte-by-byte. Random access is rare.
+- Directory: a file that only can refer to other files. That's the most elegant way to conceptually define directories.
+- Named pipe: unidirectional data flow and operates on a first-in-first-out basis. Unlike regular files, it doesn't store data persistently; it simply passes it from the writer to the reader. Anonymous pipes are created with `|`, but you can make a named pipe with `mkfifo`.
+- Symlink: a file that contains exactly one reference to another file. Can be thought of as a "shortcut".
+- File: a byte-aligned file holding some data. This kind of file is what people imagine when you say "a file". Hence the name.
+- UNIX domain socket: a socket that behaves like a TCP/IP socket, except is using file system for data transfer.
+
+Based on the descriptions of the file kinds above, you can guess what sort of files are stored in `/dev/pts`, but let's verify it:
 
 ```zig
 const std = @import("std");
@@ -391,7 +362,9 @@ character device: ptmx
 ```
 _An output of `try print_kinds("/dev/pts")`._
 
-Root-owned `ptmx` is the key to how pseudo-terminal devices are created.
+Surprisingly, we have discovered `ptmx` character device. 
+We won't get into many details about its inner workings in this article, but we will explain what is the idea behind it.
+Root-owned `ptmx` (pseudo-terminal multiplexer) is the key to how pseudo-terminal devices are created.
 
 ```
 crw--w---- 1 sweater tty  136,  0 Apr  4 21:46 0
@@ -401,27 +374,36 @@ c--------- 1 root    root   5,  2 Mar 31 06:32 ptmx
 ```
 _An output of `ls -la /dev/pts`._
 
-It's a pseudo-terminal multiplexer.
-This is the way all the terminal emulators, such as `alacritty` or `urxvt`, get main and secondary device pairs (named differently in Linux kernel).
-Terminal emulator itself then relies on the main device (a device with no path) to orchestrate session management and uses the secondary device to orchestrate input and output.
+For your terminal emulator to work, it needs a PTM device and a PTS device.
+Main pseudo-terminal device has no path attached to it and is used for coordination of the terminal state via I/O operations.
+It also is solely responsible for orchestration of session management.
 
-All of the above considerations explain the following two properties of stdio:
+Secondary pseudo-terminal device is a file linked directly to the terminal emulator's frontend.
+Writing into it causes input to be relayed to PTM and normally displayed on screen.
 
- 1. You can't seek stdio, once you flush bytes into a stdio file, they can only be sequentially consumed by a reader.
- 2. One does not simply attaches to a pts device file or to a tty file in hopes to be able to read stdio contents.
+Some time ago, users of Linux kernel could just make PTM/PTS pairs ad hoc.
+However, as the amount of objects flying around in `/dev` grew, a necessity appeared to centralised the task of giving out PTM/PTS pairs.
+This is how `ptmx` was conceived.
+System calls perform I/O on `ptmx` to have Linux Kernel create a PTM/PTS pair and return it for use of the process.
+
+Because PTS is merely an I/O orchestration tool which doesn't actually store any data, the following properties hold true for it:
+
+ 1. You can't assume to be able to seek stdio, once you flush bytes into a stdio file, they generally can only be sequentially consumed by a reader.
+ 2. One does not simply attache to a pts device file or to a tty file in hopes to be able to read stdio contents. It is a device file the role of which is to perform side effects.
 
 As a matter of fact, you can conduct the following experiment:
 
- 1. Get `pts` device file of your pseudo-terminal by running `tty`.
- 2. Start reading from it with `cat /dev/pts/$pts_id`
- 3. Try typing `echo Hello` into your pseudo-terminal.
+ 1. Get PTS device number of your pseudo-terminal by running `tty`.
+ 2. Start reading from it from another terminal with `cat /dev/pts/$pts_id`
+ 3. Try typing `echo Hello` into the first pseudo-terminal.
 
-What you will observe is that your keypresses are *either* consumed by `cat` *or* displayed in your terminal emulator because keypress was communicated to PTM, which told it to redraw, but not both at the same time.
+What you will observe is that your keypresses are *either* consumed by `cat` *or* displayed in your terminal emulator because keypress got through to PTM, which resulted in characters being drawn on the screen via PTS, but not both at the same time.
 I don't know if you find it to be a funny prank, but the behaviour of the active console is sure confusing.
 
 ![Probably a bad prank?..](./01-04-prank.png)
 
-As you can see in the code of your favourite terminal emulator, the secondary pseudo-terminal device, obtained via an `openpty(&main, &secondary, ...)` call shall be exactly the file which is going to be duplicated with `dup2` and serve as *the* stdio file.
+As you can see in the code of your favourite terminal emulator, a pair of PTM and PTS is obtained via an `openpty(&main, &secondary, ...)`.
+Then, the PTS component of this pair shall be exactly the file which is going to be duplicated with `dup2` and serve as *the* stdio file, serving both STDIN, STDOUT and STDERR.
 
 ```C
 int
@@ -485,131 +467,17 @@ ttynew(const char *line, char *cmd, const char *out, char **args)
     }
     return cmdfd;
 }
-
-size_t
-ttyread(void)
-{
-    static char buf[BUFSIZ];
-    static int buflen = 0;
-    int ret, written;
-
-    /* append read bytes to unprocessed bytes */
-    ret = read(cmdfd, buf+buflen, LEN(buf)-buflen);
-
-    switch (ret) {
-    case 0:
-        exit(0);
-    case -1:
-        die("couldn't read from shell: %s\n", strerror(errno));
-    default:
-        buflen += ret;
-        written = twrite(buf, buflen, 0);
-        buflen -= written;
-        /* keep any incomplete UTF-8 byte sequence for the next call */
-        if (buflen > 0)
-            memmove(buf, buf + written, buflen);
-        return ret;
-    }
-}
-
-void
-ttywrite(const char *s, size_t n, int may_echo)
-{
-    const char *next;
-
-    if (may_echo && IS_SET(MODE_ECHO))
-        twrite(s, n, 1);
-
-    if (!IS_SET(MODE_CRLF)) {
-        ttywriteraw(s, n);
-        return;
-    }
-
-    /* This is similar to how the kernel handles ONLCR for ttys */
-    while (n > 0) {
-        if (*s == '\r') {
-            next = s + 1;
-            ttywriteraw("\r\n", 2);
-        } else {
-            next = memchr(s, '\r', n);
-            DEFAULT(next, s + n);
-            ttywriteraw(s, next - s);
-        }
-        n -= next - s;
-        s = next;
-    }
-}
 ```
-_Stdio, writing and reading in suckless terminal. `st.c`, st 0.9._
-
-```C
-void
-ttywriteraw(const char *s, size_t n)
-{
-    fd_set wfd, rfd;
-    ssize_t r;
-    size_t lim = 256;
-
-    /*
-     * Remember that we are using a pty, which might be a modem line.
-     * Writing too much will clog the line. That's why we are doing this
-     * dance.
-     * FIXME: Migrate the world to Plan 9.
-     */
-    while (n > 0) {
-        FD_ZERO(&wfd);
-        FD_ZERO(&rfd);
-        FD_SET(cmdfd, &wfd);
-        FD_SET(cmdfd, &rfd);
-
-        /* Check if we can write. */
-        if (pselect(cmdfd+1, &rfd, &wfd, NULL, NULL, NULL) < 0) {
-            if (errno == EINTR)
-                continue;
-            die("select failed: %s\n", strerror(errno));
-        }
-        if (FD_ISSET(cmdfd, &wfd)) {
-            /*
-             * Only write the bytes written by ttywrite() or the
-             * default of 256. This seems to be a reasonable value
-             * for a serial line. Bigger values might clog the I/O.
-             */
-            if ((r = write(cmdfd, s, (n < lim)? n : lim)) < 0)
-                goto write_error;
-            if (r < n) {
-                /*
-                 * We weren't able to write out everything.
-                 * This means the buffer is getting full
-                 * again. Empty it.
-                 */
-                if (n < lim)
-                    lim = ttyread();
-                n -= r;
-                s += r;
-            } else {
-                /* All bytes have been written. */
-                break;
-            }
-        }
-        if (FD_ISSET(cmdfd, &rfd))
-            lim = ttyread();
-    }
-    return;
-
-write_error:
-    die("write error on tty: %s\n", strerror(errno));
-}
-```
-_Funny FIXME. `st.c`, st 0.9._
+_Stdio in suckless terminal. `st.c`, st 0.9._
 
 ## Doppelgang Paradox
 
 We already learned that it doesn't happen that three different device files are created for each entity in `stdio`.
 But if it's the same file, how come they can be distinguished as data gets flushed into those?
 Well, the short answer is that they can't be distinguished.
-To a degree that even stdin gets opened with write permissions by default, which means you can write into it.
+To a degree that even STDIN is opened with write permissions by default, which means you can write into it.
 And indeed, when you write into STDIN, your terminal will behave in the same way as it would if you wrote into STDOUT or STDERR.
-Thus, the three are, unsurprisingly, true doppelgangers!
+The three files, as far as your console is concerned, are truly doppelgangers.
 
 ```zig
 const std = @import("std");
@@ -620,8 +488,8 @@ pub fn main() !void {
 ```
 _This program will output "Hello, world!" in your terminal emulator._
 
-However, since the meaning of STDIN being attached to `/dev/pts/$pts_id` is to read user input, which is passed to PTS via PTM as a result of handling keypresses, this write shall be ignored and won't be read by the following program.
-The forked child here shall terminate only after a user presses a key, which shall be relayed to the child via STDIN.
+However, since the meaning of STDIN being attached to PTS is to read user input, which is passed to PTS via PTM as a result of handling keypresses, this write shall be ignored and won't be read by the program shown in the next listing.
+The forked child here shall terminate only after a user presses a key, which shall be relayed to it via STDIN.
 
 ```zig
 const std = @import("std");
@@ -639,23 +507,23 @@ pub fn main() !void {
     }
 }
 ```
-_This program will crash if you pipe something into it, because the pipe won't be opened for writing!_
+_Note that this program will crash if you pipe something into it, because the pipe won't be opened for writing!_
 
 Thus, the only way to "un-dopplegang" stdio is to swap out some file descriptors.
-The easiest way to do so is by using pipes and redirections while invoking programs from a shell like `bash`.
+The most common way to do so is by using pipes and redirections while invoking programs from a shell like `bash`.
 Observe every stdio file being replaced in the following snippet.
 
 ```
-λ echo '/dev/pts/ who?' | ls -la /proc/self/fd 2>output.err | tee output.txt
+λ ls -la /proc/self/fd <input.txt 2>output.err | tee output.txt
 total 0
-dr-x------ 2 sweater sweater  0 Apr  5 01:20 ./
-dr-xr-xr-x 9 sweater sweater  0 Apr  5 01:20 ../
-lr-x------ 1 sweater sweater 64 Apr  5 01:20 0 -> pipe:[8367988]
-l-wx------ 1 sweater sweater 64 Apr  5 01:20 1 -> pipe:[8367990]
-l-wx------ 1 sweater sweater 64 Apr  5 01:20 2 -> /home/sweater/output.err
-lr-x------ 1 sweater sweater 64 Apr  5 01:20 3 -> /proc/26527/fd
+dr-x------ 2 sweater sweater  0 Apr  7 19:26 ./
+dr-xr-xr-x 9 sweater sweater  0 Apr  7 19:26 ../
+lr-x------ 1 sweater sweater 64 Apr  7 19:26 0 -> /tmp/input.txt
+l-wx------ 1 sweater sweater 64 Apr  7 19:26 1 -> pipe:[3717804]
+l-wx------ 1 sweater sweater 64 Apr  7 19:26 2 -> /tmp/output.err
+lr-x------ 1 sweater sweater 64 Apr  7 19:26 3 -> /proc/19836/fd
 ```
-_Input and output are piped, while stderr is recorded into a regular file. bash 5.0.7._
+_Input is a file, the output is piped, while stderr is recorded into a regular file. bash 5.0.7._
 
 > Note! `tee` is a very useful program for situations when you need to have an interactive session, traces of which you want to preserve for a later review or further automated manipulation.
 > It displays whatever it gets into STDIN into STDOUT, but also records that data into file.
@@ -703,8 +571,15 @@ Hello World
 ```
 _Making a text file the name of which is a multiline string._
 
+> Note! The snippet above uses here-document feature of bash.
+> It is a type of input redirection which creates a regular temporary file, writes to it whatever is between _limit strings_ and redirects it into STDIN.
+> After the redirection happens, the file gets deleted.
+> For example, if you `<<` into `ls -la /proc/self/fd`, you will see an output akin to `0 -> '/tmp/sh-thd.myfoxY (deleted)'`.
+
 Another reason to use STDIN to read "big" inputs is the flexibility it provides.
-A tool that calls your tool won't need to format its output in any particular way, for instance, if you use JSON as to encode your IPC calls. In the next example, the program that emits solution can emit multiline JSON, single-line JSON or even weirdly-formatted JSON and the communication won't break down.
+A tool that calls your program won't need to format its output in any particular way.
+It may be relevant if, for instance, use JSON as to encode your IPC calls.
+In the next example, the program that emits solution can emit multiline JSON, single-line JSON or even weirdly-formatted JSON and the communication won't break down.
 
 ```rust
 pub fn main() {
@@ -753,17 +628,19 @@ In case of `npm`, you may do something like this.
 Even though IPC with stdio is the simplest way to ensure data communicating between different processes, it's not without risks when it comes to using third party tools in the pipeline.
 We will finish this article with a recent bug that was plaguing our development team.
 
-A system which works with many binaries we have some control over, uses stdio for IPC.
-We build and run various these binaries with Makefiles using standard "recipe API".
+The system of interest for this example is a system which works with many binaries we have some control over, uses stdio for IPC.
+We build and run various these binaries with Makefiles using standard recipe API.
 
-All the tests worked, including end-to-end test.
-However, when we would run the whole system in development mode or on staging, running these pipelines involving `make` would fail with no-parse error.
+All the tests worked, including the big end-to-end test.
+However, when we would run the whole system in development mode or on staging, everything worked except for the execution pipelines involving `make`.
+The latter would fail with no-parse error while trying to process the data emitted into STDOUT by the child process.
 
-The problem was that we were running staging and development environments with another `make` recipe, which was making sure that the environment is set up.
+The problem was that we were running staging and development environments with another `make` recipe
+The purpose of this recipe was to make sure that the environment is set up and then pop an interactive system shell.
 The reason for this weird bug is twofold:
 
 1. `make`, against all the best practices, is printing diagnostic messages into STDOUT.
-2. When `make` runs another `make` under the hood, by default it starts printing diagnostic messages, even though it doesn't do it by default.
+2. When `make` runs another `make` under the hood, it starts printing diagnostic messages, even though it doesn't do it when it's invoked at the top level.
 
 ![Make gets weird](./01-05-pollution.png)
 
@@ -780,12 +657,13 @@ index f133d1d..653f395 100644
      // If everything is OK, run the checker
      if let Ok(run_output) = &submission_output.run_output {
          let mut checker_process = match Command::new("make")
-+            .arg("--silent") // https://zulip.memorici.de/#narrow/stream/30-.E2.88.85HR/topic/SinglePlayer.20zhr_devs/near/70749
++            .arg("--silent")
              .arg("check")
              .arg(format!("input={}", input.to_str().unwrap()))
              .current_dir(checker) // Set the current directory to the checker directory
 ```
 _The final piece of advice we give you in this article is to always run `make` with `--silent` from your code!_
 
+That's it for the inaugural article of the Flake Magazine.
 We hope you enjoyed this deep-dive into stdio, and hopefully now you feel like you know both its ins and outs.
 Some pun intended!
