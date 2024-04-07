@@ -13,7 +13,9 @@ If you always were interested in what this language looks like and how to work w
 
 If there was a UNIX musical ever made, in the tradition of punchy single-word musical names, it would be called "Files!".
 There is an old adage that everything in UNIX is a file.
-It holds true for stdio, even though the three stdio files are not regular files!
+It holds true for stdio, even though the three stdio files are device files, not regular files!
+We shall touch on this down the line.
+
 In Linux, every process has a data structure called `files_struct`, which holds `fdtable`, which provides a low-level interface to all the file descriptors currently associated with said process.
 
 ```C
