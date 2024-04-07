@@ -47,9 +47,11 @@ Kernel routines can verify if a file is open by calling `fd_is_open(unsigned int
 
 ![Elixir Cross-Referencer](./01-01-elixir.png)
 
-When `sys_clone()`, a generic process forking routine, which is a macro-wrapper around `kernel_clone()` is called, all the files from the parent process, shall be copied into the child process.
-It is done inside the most intricate `copy_process()` function between tracer setup and the information about the newly forked process is relayed to the scheduler.
-The function that governs copying the `files_struct` is `copy_files()` and it will do what it says on the tin unless clone argument `no_files` is set (see struct `kernel_clone_args` defined in `sched/task.h`).
+Processes are forked with `sys_clone()`, which is a generic process forking routine.
+It is a macro-wrapper around `kernel_clone()`, which eventually copies all the file descriptors from the parent proces in the most intricate `copy_process()`.
+It happens after tracer setup, and only after the descriptors are copied, the information about the newly forked process is relayed to the scheduler.
+
+The function that performs the copying of the `files_struct` is `copy_files()` and it will do what it says on the tin unless clone argument `no_files` is set (see struct `kernel_clone_args` defined in `sched/task.h`).
 
 To illustrate the semantics of `copy_files()`, let's have a look at the following Zig code:
 
@@ -58,6 +60,8 @@ const std = @import("std");
 
 pub fn main() !void {
     const message = "Hello, world!\n";
+
+    // Write and create
     const flags = std.os.O.WRONLY | std.os.O.CREAT;
     const fd = try std.os.open("./output.txt", flags, 0o644);
 
@@ -67,6 +71,15 @@ pub fn main() !void {
         std.os.nanosleep(0, 100_000_000);
         std.debug.print("[CHILD] Attempting to write to fd.\n", .{});
         try fds("CHILD");
+        // This write will happen because file descriptors are duplicated independently
+        // even though we shall close the file descriptor corresponding to `output.txt`
+        // shall be closed by the parent process immediately after forking.
+        //
+        // A system call similar to `dup2()` is used.
+        // 
+        // `dup2()` makes susre that the integer associated with the file descriptor 
+        // is preserved after dupplication.
+        // For stdio, it ensures that STDIN shall be 0, STDOUT -- 1, etc.
         const result = try std.os.write(fd, message);
         if (result != message.len) {
             std.debug.print("[CHILD] Failed to write to fd.\n", .{});
