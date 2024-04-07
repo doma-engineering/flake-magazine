@@ -1,0 +1,13 @@
+{
+    "name": "makebreak",
+    "version": "1.0.0",
+    "description": "",
+    "main": "index.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1",
+        "cat": "node -e \"process.stdin.on('data', function(x) { process.stdout.write(x); });\"",
+        "pointless": "cat - | echo"
+    },
+    "author": "",
+    "license": "ISC"
+}

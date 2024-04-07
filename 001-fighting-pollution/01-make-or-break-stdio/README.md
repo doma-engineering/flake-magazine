@@ -12,7 +12,7 @@ If you always were interested in what this language looks like and how to work w
 
 If there was a UNIX musical ever made, in the tradition of punchy single-word musical names, it would be called "Files!".
 There is an old adage that everything in UNIX is a file.
-It certainly holds true for stdio.
+It holds true for stdio, even though the three stdio files are not regular files!
 In Linux, every process has a data structure called `files_struct`, which holds `fdtable`, which provides a low-level interface to all the file descriptors currently associated with said process.
 
 ```C
@@ -134,6 +134,69 @@ As we run this in a clean terminal, we get output that confirms that `output.txt
 [PARENT] This was a triumph.
 Hello, world!
 ```
+
+We can also check that these files can indeed work with the usual functions that work with file descriptors.
+And that, indeed, closed files won't be accessible by the child.
+
+```zig
+pub fn main() !void {
+    try fds("PARENT_BEFORE");
+    // Close standard file descriptors
+    std.os.close(0);
+    try fds("PARENT_NO_STDIN");
+    std.os.close(1);
+    try fds("PARENT_NO_STDOUT");
+    // std.os.close(2); // Leave STDERR open for debugging
+
+    const pid = try std.os.fork();
+
+    if (pid == 0) {
+        try fds("CHILD");
+        const stdin_fd = 0; // STDIN file descriptor
+        var buf = [_:1]u8{0};
+        std.debug.print("[CHILD] Attempting to read from STDIN...\n", .{});
+        _ = std.os.read(stdin_fd, &buf) catch std.os.exit(1);
+        std.debug.print("[CHILD] Read from STDIN: {s}\n", .{buf});
+        std.os.exit(0);
+    } else {
+        try fds("PARENT_AFTER");
+        const wpr = std.os.waitpid(pid, 0x00000000); // Wait for child process to exit
+
+        // Check if the child exited with an error due to closed STDIN
+        if (std.os.W.IFEXITED(wpr.status) and std.os.W.EXITSTATUS(wpr.status) == 1) {
+            std.debug.print("[PARENT] Child process confirmed that STDIN is closed.\n", .{});
+        } else {
+            std.debug.print("[PARENT] Child process did not behave as expected.\n", .{});
+        }
+    }
+}
+```
+_This code uses `fds` function just like in the previous example._
+
+When you inspect the output of this command, note that file descriptor 0 is allocated to `/proc/26202/fd` due to us opening a file descriptor in `fds` function.
+The first unused file descriptor shall be used.
+In this case, since we closed STDIN, it is `0`.
+If you were wondering if closing stdio files is a good idea, I hope that this curious side effect shall be enough to convince you that it isn't a good idea indeed.
+
+```
+λ zig build run-01A-closed-stdio
+[PARENT_BEFORE] FD 0: /dev/pts/2
+[PARENT_BEFORE] FD 1: /dev/pts/2
+[PARENT_BEFORE] FD 2: /dev/pts/2
+[PARENT_BEFORE] FD 3: /proc/26202/fd
+[PARENT_NO_STDIN] FD 0: /proc/26202/fd
+[PARENT_NO_STDIN] FD 1: /dev/pts/2
+[PARENT_NO_STDIN] FD 2: /dev/pts/2
+[PARENT_NO_STDOUT] FD 0: /proc/26202/fd
+[PARENT_NO_STDOUT] FD 2: /dev/pts/2
+[PARENT_AFTER] FD 0: /proc/26202/fd
+[PARENT_AFTER] FD 2: /dev/pts/2
+[CHILD] FD 0: /proc/26203/fd
+[CHILD] FD 2: /dev/pts/2
+[CHILD] Attempting to read from STDIN...
+[PARENT] Child process confirmed that STDIN is closed.
+```
+
 
 You can see that file descriptors 0, 1, and 2 are set both for parent and the child.
 Of course, most, if not all, the materials online on `stdio` will tell you that these are three special files that get passed from parent to child.
@@ -582,52 +645,131 @@ _Input and output are piped, while stderr is recorded into a regular file. bash 
 > It displays whatever it gets into STDIN into STDOUT, but also records that data into file.
 > Use `tee -a` if you want to append to file without overwriting.
 
----
+# Using stdio for IPC
 
-# Notes & Sketches
+In the beginning of this article, we have seen how to write our own software that interacts with stdio.
+As was shown in the last example, you could use pipes (`|`) and redirections (`>` and even `<`) to swap out your PTS with another file while spawning processes from a shell.
 
-## Zig on I/O
+Let's now have a look at some examples of using stdio for IPC both when it comes to commonly used commands and from our code.
 
-Almost echoing my words about how fundamental of a concept I/O is in UNIX, Zig's hello world is talking about how important it is not to pollute stdout.
+## To pipe or not to pipe
 
-```zig
-const std = @import("std");
+While learning Linux or other UNIX systems, one of the first sequence of commands we get acquainted with is "something something pipe grep".
+Very often, however, we want to just grep contents of some file for some string.
+Writing it as `cat file.txt | grep string`, however, is wasteful in the amount of file descriptors created (not that it particularly matters).
+Instead, with what we learned about stdio from this article, we can just write `grep string <file.txt`.
+This will directly substitute file descriptor 0 with a descriptor pointing at `file.txt`.
 
-pub fn main() !void {
-    // Prints to stderr (it's a shortcut based on `std.io.getStdErr()`)
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
+## Input or argument
 
-    // stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    const stdout_file = std.io.getStdOut().writer();
-    var bw = std.io.bufferedWriter(stdout_file);
-    const stdout = bw.writer();
+An important consideration to choose whether or not use CLI arguments or stdio is the amount of data you want to shove into those.
+If those are simple strings, especially not something that needs escaping, using arguments is perfectly reasonable.
+While you can do the same with command-line arguments too, if you escape them, as seen in the next example, it's a bad design because it introduces unnecessary fragility.
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+```
+Sun Apr 07 00:27:32:244240400 sweater@conflagrate /tmp
+λ export x=$(cat <<EOF
+Multiline
+File
+Name.txt
+EOF
+)
+Sun Apr 07 00:27:38:754602700 sweater@conflagrate /tmp
+λ echo "$x"
+Multiline
+File
+Name.txt
+Sun Apr 07 00:27:41:467729600 sweater@conflagrate /tmp
+λ echo "Hello World" > "$x"
+Sun Apr 07 00:27:52:976430800 sweater@conflagrate /tmp
+λ cat Multiline$'\n'File$'\n'Name.txt
+Hello World
+```
+_Making a text file the name of which is a multiline string._
 
-    try bw.flush(); // don't forget to flush!
+Another reason to use STDIN to read "big" inputs is the flexibility it provides.
+A tool that calls your tool won't need to format its output in any particular way, for instance, if you use JSON as to encode your IPC calls. In the next example, the program that emits solution can emit multiline JSON, single-line JSON or even weirdly-formatted JSON and the communication won't break down.
+
+```rust
+pub fn main() {
+    let arg_input = std::env::args().nth(1).expect("No input file provided");
+    let solution_str = std::io::stdin()
+        .lock()
+        .lines()
+        .next()
+        .expect("No solution provided")
+        .expect("Failed to read solution");
+    let solution =
+        Solution::new(serde_json::from_str(&solution_str).expect("Failed to parse solution"));
+
+    let input = Input::from_json(&PathBuf::from(arg_input)).expect("Failed to read input file");
+    let forest = generate_forest(input.clone(), solution.clone());
+    let score = score_graph(&forest);
+
+    println!("{}", score);
 }
 ```
 
-## To investigate kernel list, use bootlin indexer
+## Bending tools
 
-https://elixir.bootlin.com/linux/latest/C/ident/console_on_rootfs
+If you need to run your commands from some programmable tool such as `make` or `npm`, normally you can bend those tools to your will.
+Since normally command runners execute commands inside a shell, you can leverage `cat` from inside the recipe to forward STDIN where you need it to be forwared.
 
-## Style of this Article
+As a bit of foreshadowing, to maintain clean STDOUT, in your `make` recipes, you should prefix the commands you call from the recipes with `@`.
+In our challenge of capturing STDIN, we prefix `cat`.
 
-Is inspired by "The Little X"
+```make
+check: target/release/checker
+        @cat | ./target/release/checker $(input)
+```
 
-## Agetty
+In case of `npm`, you may do something like this.
 
-https://kernel.googlesource.com/pub/scm/utils/util-linux/util-linux/+/v2.7.1/login-utils/agetty.c
+```json
+"scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "cat": "cat | index.js"
+},
+```
 
-## Make "bug"
+## When make breaks
 
-See section 5.7.4 here: https://www.gnu.org/software/make/manual/make.html
+Even though IPC with stdio is the simplest way to ensure data communicating between different processes, it's not without risks when it comes to using third party tools in the pipeline.
+We will finish this article with a recent bug that was plaguing our development team.
 
-## /dev/console on rootfs
+A system which works with many binaries we have some control over, uses stdio for IPC.
+We build and run various these binaries with Makefiles using standard "recipe API".
 
-Rob is cool btw
+All the tests worked, including end-to-end test.
+However, when we would run the whole system in development mode or on staging, running these pipelines involving `make` would fail with no-parse error.
 
-https://buildroot.uclibc.narkive.com/rM1I9Jix/where-is-dev-console-created-when-using-devtmpfs#post2
+The problem was that we were running staging and development environments with another `make` recipe, which was making sure that the environment is set up.
+The reason for this weird bug is twofold:
+
+1. `make`, against all the best practices, is printing diagnostic messages into STDOUT.
+2. When `make` runs another `make` under the hood, by default it starts printing diagnostic messages, even though it doesn't do it by default.
+
+![Make gets weird](./01-05-pollution.png)
+
+These two factors ended up in pollution of STDOUT, which resulted in underlying programs not being able to parse the output.
+After we have pin-pointed the issue, the fix was simple.
+
+```
+λ git diff e019ee8dc0d1229a65c9fef11571d33bef5eb3a9
+diff --git a/bakery/src/singleplayer.rs b/bakery/src/singleplayer.rs
+index f133d1d..653f395 100644
+--- a/bakery/src/singleplayer.rs
++++ b/bakery/src/singleplayer.rs
+@@ -169,6 +169,7 @@ pub fn simple_singleplayer(
+     // If everything is OK, run the checker
+     if let Ok(run_output) = &submission_output.run_output {
+         let mut checker_process = match Command::new("make")
++            .arg("--silent") // https://zulip.memorici.de/#narrow/stream/30-.E2.88.85HR/topic/SinglePlayer.20zhr_devs/near/70749
+             .arg("check")
+             .arg(format!("input={}", input.to_str().unwrap()))
+             .current_dir(checker) // Set the current directory to the checker directory
+```
+_The final piece of advice we give you in this article is to always run `make` with `--silent` from your code!_
+
+We hope you enjoyed this deep-dive into stdio, and hopefully now you feel like you know both its ins and outs.
+Some pun intended!

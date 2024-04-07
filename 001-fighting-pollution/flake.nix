@@ -8,6 +8,7 @@
   outputs = { self, nixpkgs }: 
     let 
       pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      # npkgs = pkgs.nodePackages;
     in
     {
         packages.x86_64-linux.hello = pkgs.hello;
@@ -17,6 +18,8 @@
             buildInputs = [ 
                 pkgs.zig
                 pkgs.zls
+
+                pkgs.nodejs
             ];
         };
     };
