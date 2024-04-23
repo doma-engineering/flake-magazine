@@ -16,3 +16,4 @@ The articles I want to write are:
 - nativeBuildInputs to remove the pollution of `LD_LIBRARY_PATH` and other variables.
 - `/filter add irc_smart * irc_smart_filter *` and `/set irc.look.smart_filter_delay 5` remove service message pollution in weechat IRC client.
 - Use `inline for` in zig to get around compile-time unknown items. (Useful in build programs).
+- Focus on process subtree with `htop`: `htop -p $(ps -ef | awk -v proc=$PID 'BEGIN{pids[proc]=1;printf "%s",proc} {if(pids[$3]==1){printf ",%s",$2; pids[$2]=1}}')`
