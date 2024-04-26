@@ -623,6 +623,10 @@ In case of `npm`, you may do something like this.
 },
 ```
 
+## Bridge too Near
+
+**TODO**: Some tools except to be attached to STDIN (for example, REPLs) and when STDIN ends they exit. For example, Elixir's `iex`.
+
 ## When make breaks
 
 Even though IPC with stdio is the simplest way to ensure data communicating between different processes, it's not without risks when it comes to using third party tools in the pipeline.
